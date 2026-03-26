@@ -205,6 +205,18 @@ if file_carga and file_bio:
         columnas_calculos  = ['HORAS_TOTALES_BRUTAS','DESCUENTO_ALMUERZO','HORAS_TURNO','RECARGOS_PROYECTADOS']
         df_final = df_cronograma_final[columnas_ordenadas + columnas_calculos].copy()
 
+        # ── 7.1 FILTRAR PRIMEROS SIETE MESES ──────────────────
+
+        # 2. Definir el rango (puedes dejarlo fijo o usar widgets)
+        fecha_inicio = pd.to_datetime("2026-01-01")
+        fecha_fin = pd.to_datetime("2026-07-31")
+        
+        # 3. Aplicar el filtro
+        df_final = df_final[(df_final['FECHA'] >= fecha_inicio) & (df_final['FECHA'] <= fecha_fin)]
+        
+        # 4. Ordenar cronológicamente
+        df_final = df_final.sort_values(by=['FECHA', 'NOMBRE']).reset_index(drop=True)
+
         # ── 8. LEER BIOMÉTRICO ────────────────────────────────────────
         biometrico = pd.read_excel(
             file_bio,
