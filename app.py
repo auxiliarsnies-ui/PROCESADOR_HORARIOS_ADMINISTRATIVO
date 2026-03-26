@@ -4,6 +4,12 @@ from datetime import datetime
 import holidays
 import io
 
+meses_es = {
+    1: "ENERO", 2: "FEBRERO", 3: "MARZO", 4: "ABRIL",
+    5: "MAYO", 6: "JUNIO", 7: "JULIO", 8: "AGOSTO",
+    9: "SEPTIEMBRE", 10: "OCTUBRE", 11: "NOVIEMBRE", 12: "DICIEMBRE"
+}
+
 # Configuración de la página
 st.set_page_config(page_title="Procesador Biométrico", layout="wide")
 
@@ -122,7 +128,7 @@ if archivo_carga and archivo_biometrico:
 
         # 8. CRUCE Y CÁLCULOS FINALES
         df_cruce = df_planilla_final[['llave', 'FECHA', 'DOCUMENTO', 'NOMBRE', 'SEDE', 'HORA_INICIO', 'HORA_SALIDA', 'DESCUENTO_ALMUERZO']].copy()
-        df_cruce.insert(1, "MES", df_cruce["FECHA"].dt.month_name(locale="es_ES").str.upper())
+        df_cruce.insert(1, "MES", df_cruce["FECHA"].dt.month.map(meses_es))
         df_cruce = pd.merge(df_cruce, biometrico[['llave', 'hora_entrada', 'hora_salida']], on='llave', how='left')
 
         # Lógica de Horas Laboradas y Recargos (Tus funciones originales simplificadas)
