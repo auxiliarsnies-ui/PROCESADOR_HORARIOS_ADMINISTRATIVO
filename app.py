@@ -300,44 +300,6 @@ if file_carga and file_bio:
         df_cruce['TOTAL_HORAS_RECARGO'] = df_cruce.apply(calcular_recargos_reales, axis=1)
 
     # ─────────────────────────────────────────────
-    # VISUALIZACIÓN DE RESULTADOS
-    # ─────────────────────────────────────────────
-    st.success("✅ Proceso completado exitosamente.")
-
-    tab1, tab2 = st.tabs(["📋 Planilla de Horario", "🔗 Cruce Biométrico"])
-
-    with tab1:
-        st.subheader(f"Planilla de Horario — {len(df_final):,} registros")
-        st.dataframe(df_final, use_container_width=True, height=400)
-
-    with tab2:
-        st.subheader(f"Cruce Biométrico — {len(df_cruce):,} registros")
-
-        # Filtros rápidos
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            meses_disponibles = ["Todos"] + sorted(df_cruce["MES"].dropna().unique().tolist())
-            mes_sel = st.selectbox("Filtrar por mes", meses_disponibles)
-        with col_f2:
-            sedes_disponibles = ["Todas"] + sorted(df_cruce["SEDE"].dropna().unique().tolist())
-            sede_sel = st.selectbox("Filtrar por sede", sedes_disponibles)
-
-        df_vista = df_cruce.copy()
-        if mes_sel  != "Todos":  df_vista = df_vista[df_vista["MES"]  == mes_sel]
-        if sede_sel != "Todas":  df_vista = df_vista[df_vista["SEDE"] == sede_sel]
-
-        st.dataframe(df_vista, use_container_width=True, height=400)
-
-        # Métricas resumen
-        st.markdown("### 📊 Resumen")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total Horas Laboradas",  f"{df_vista['HORAS_LABORADAS'].sum():,.1f} h")
-        m2.metric("Total Horas Recargo",    f"{df_vista['TOTAL_HORAS_RECARGO'].sum():,.1f} h")
-        m3.metric("Registros sin marca",
-                  int((df_vista['hora_entrada'] == 'SIN MARCA').sum() +
-                      df_vista['hora_entrada'].isna().sum()))
-
-    # ─────────────────────────────────────────────
     # DESCARGA DEL EXCEL FINAL
     # ─────────────────────────────────────────────
     import io
