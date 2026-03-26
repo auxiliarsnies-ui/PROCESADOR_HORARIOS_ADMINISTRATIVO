@@ -247,7 +247,7 @@ if file_carga and file_bio:
                     if p_out > p_in:
                         bruto = (p_out - p_in).total_seconds() / 3600
                         desc  = float(row['DESCUENTO_ALMUERZO'])
-                        turno = bruto - desc if desc <= 3 else bruto
+                        turno = bruto - desc
                         return round(max(0, turno), 2)
                     return 0.0
                 except:
