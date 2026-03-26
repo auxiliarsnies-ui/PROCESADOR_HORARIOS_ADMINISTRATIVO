@@ -146,9 +146,6 @@ if archivo_carga and archivo_biometrico:
 
         df_cruce['HORAS_LABORADAS'] = df_cruce.apply(calcular_riguroso, axis=1)
 
-        # --- SECCIÓN DE RESULTADOS ---
-        st.success("✅ Procesamiento completado")
-
         # --- DESCARGA DE EXCEL ---
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
