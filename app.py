@@ -148,9 +148,6 @@ if archivo_carga and archivo_biometrico:
 
         # --- SECCIÓN DE RESULTADOS ---
         st.success("✅ Procesamiento completado")
-        
-        st.subheader("Vista Previa del Cruce")
-        st.dataframe(df_cruce.head(10))
 
         # --- DESCARGA DE EXCEL ---
         buffer = io.BytesIO()
