@@ -275,6 +275,10 @@ if file_carga and file_bio:
 
         df_cruce['HORAS_LABORADAS'] = df_cruce.apply(calcular_riguroso_con_festivos, axis=1)
 
+        # ── 10.5 AJUSTAR A 8 JORNADAS DE MAS DE 8 HORAS ───────────────────────────────────────
+        df_cruce['HORAS_LABORADAS'] = df_cruce['HORAS_LABORADAS'].clip(upper=8.0)
+
+
         # ── 11. RECARGOS REALES ───────────────────────────────────────
         def calcular_recargos_reales(row):
             if row['hora_entrada'] == 'SIN MARCA' or pd.isna(row['hora_entrada']):
