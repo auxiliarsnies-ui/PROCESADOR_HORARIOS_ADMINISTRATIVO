@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import holidays
+import io
 
 # ─────────────────────────────────────────────
 # CONFIGURACIÓN DE PÁGINA
@@ -59,6 +60,8 @@ with col2:
 # ─────────────────────────────────────────────
 if file_carga and file_bio:
     with st.spinner("Procesando datos..."):
+        # Inicializamos la barra de progreso
+        progress_bar = st.progress(0, text="Iniciando lectura de archivos...")
 
         # ── 1. LEER CARGA ADMINISTRATIVA ──────────────────────────────
         columnas_requeridas = [
@@ -71,6 +74,7 @@ if file_carga and file_bio:
             "HORARIO_SABADO_1"
         ]
         df = pd.read_excel(file_carga, usecols=columnas_requeridas)
+        progress_bar.progress(10, text="Archivo administrativo leído. Combinando jornadas...")
 
         # ── 2. COMBINAR JORNADAS POR DÍA ─────────────────────────────
         dias = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES']
@@ -95,9 +99,9 @@ if file_carga and file_bio:
             df[nueva] = df.apply(combinar_horas, axis=1)
 
         df['HORARIO_SABADO'] = df['HORARIO_SABADO_1']
-
         columnas_a_borrar = [f'HORARIO_{d}_{i}' for d in dias for i in [1, 2]] + ['HORARIO_SABADO_1']
         df_final_step = df.drop(columns=columnas_a_borrar)
+        progress_bar.progress(20, text="Desdinamizando la estructura (Melt)...")
 
         # ── 3. MELT (DESDINAMIZACIÓN) ─────────────────────────────────
         id_vars    = ['DOCUMENTO', 'NOMBRE', 'SEDE', 'FINI', 'FFIN']
@@ -111,6 +115,7 @@ if file_carga and file_bio:
             value_name='HORARIO'
         )
         df_largo['DIA'] = df_largo['DIA'].str.replace('HORARIO_', '')
+        progress_bar.progress(35, text="Calculando horas brutas y descuentos...")
 
         # ── 4. CÁLCULO HORAS BRUTAS Y DESCUENTO ALMUERZO ─────────────
         def calcular_horario_ajustado(rango_texto):
@@ -132,6 +137,7 @@ if file_carga and file_bio:
         df_largo['HORAS_TOTALES_BRUTAS'] = resultados[0]
         df_largo['DESCUENTO_ALMUERZO']   = resultados[1]
         df_largo['JORNADA_FINAL']        = df_largo['HORAS_TOTALES_BRUTAS'] - df_largo['DESCUENTO_ALMUERZO']
+        progress_bar.progress(50, text="Construyendo el cronograma diario...")
 
         # ── 5. CONSTRUCCIÓN CRONOGRAMA ────────────────────────────────
         df_largo['FINI'] = pd.to_datetime(df_largo['FINI'], errors='coerce', dayfirst=True)
@@ -166,6 +172,7 @@ if file_carga and file_bio:
                 continue
 
         df_cronograma_final = pd.concat(cronograma_lista, ignore_index=True)
+        progress_bar.progress(65, text="Calculando recargos nocturnos proyectados...")
 
         # ── 6. RECARGOS NOCTURNOS PROYECTADOS ────────────────────────
         def calcular_recargo_nocturno(horario_texto, inicio_nocturno=19):
@@ -206,16 +213,12 @@ if file_carga and file_bio:
         df_final = df_cronograma_final[columnas_ordenadas + columnas_calculos].copy()
 
         # ── 7.1 FILTRAR PRIMEROS SIETE MESES ──────────────────
-
-        # 2. Definir el rango (puedes dejarlo fijo o usar widgets)
         fecha_inicio = pd.to_datetime("2026-01-01")
         fecha_fin = pd.to_datetime("2026-07-31")
         
-        # 3. Aplicar el filtro
         df_final = df_final[(df_final['FECHA'] >= fecha_inicio) & (df_final['FECHA'] <= fecha_fin)]
-        
-        # 4. Ordenar cronológicamente
         df_final = df_final.sort_values(by=['FECHA', 'NOMBRE']).reset_index(drop=True)
+        progress_bar.progress(75, text="Leyendo archivo biométrico...")
 
         # ── 8. LEER BIOMÉTRICO ────────────────────────────────────────
         biometrico = pd.read_excel(
@@ -228,12 +231,13 @@ if file_carga and file_bio:
             0, 'llave',
             biometrico['fecha'].dt.strftime('%d/%m/%Y') + '-' + biometrico['Documento'].astype(str)
         )
+        progress_bar.progress(85, text="Realizando cruce de datos...")
 
         # ── 9. CRUCE ──────────────────────────────────────────────────
         df_cruce = df_final[["llave","FECHA","DOCUMENTO","NOMBRE","SEDE",
                              "HORA_INICIO","HORA_SALIDA","DESCUENTO_ALMUERZO"]].copy()
 
-        # DICCIONARIO MESES → reemplaza dt.month_name(locale="es_ES")
+        # DICCIONARIO MESES
         df_cruce.insert(1, "MES", df_cruce["FECHA"].dt.month.map(MESES_ES))
 
         df_cruce = pd.merge(
@@ -242,6 +246,7 @@ if file_carga and file_bio:
             on='llave',
             how='left'
         )
+        progress_bar.progress(90, text="Calculando horas laboradas y validando festivos...")
 
         # ── 10. HORAS LABORADAS ───────────────────────────────────────
         festivos_co = holidays.Colombia(years=range(2025, 2028))
@@ -289,7 +294,7 @@ if file_carga and file_bio:
 
         # ── 10.5 AJUSTAR A 8 JORNADAS DE MAS DE 8 HORAS ───────────────────────────────────────
         df_cruce['HORAS_LABORADAS'] = df_cruce['HORAS_LABORADAS'].clip(upper=8.0)
-
+        progress_bar.progress(95, text="Calculando recargos reales...")
 
         # ── 11. RECARGOS REALES ───────────────────────────────────────
         def calcular_recargos_reales(row):
@@ -314,17 +319,18 @@ if file_carga and file_bio:
                 return 0.0
 
         df_cruce['TOTAL_HORAS_RECARGO'] = df_cruce.apply(calcular_recargos_reales, axis=1)
+        
+        # ── PREPARANDO EXCEL ─────────────────────────────────────────
+        progress_bar.progress(98, text="Generando archivo Excel para descarga...")
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_final.to_excel(writer,  sheet_name='Planilla_horario',  index=False)
+            df_cruce.to_excel(writer,  sheet_name='Cruce_biometrico',  index=False)
+        buffer.seek(0)
+        
+        progress_bar.progress(100, text="¡Procesamiento completo!")
 
-    # ─────────────────────────────────────────────
-    # DESCARGA DEL EXCEL FINAL
-    # ─────────────────────────────────────────────
-    import io
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_final.to_excel(writer,  sheet_name='Planilla_horario',  index=False)
-        df_cruce.to_excel(writer,  sheet_name='Cruce_biometrico',  index=False)
-    buffer.seek(0)
-
+    st.success("✅ ¡El archivo está listo!")
     st.download_button(
         label="⬇️ Descargar Reporte Excel",
         data=buffer,
