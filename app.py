@@ -1,377 +1,325 @@
 import streamlit as st
-import holidays
 import pandas as pd
-import numpy as np
-import re
+from datetime import datetime
+import holidays
 import io
-from datetime import datetime, timedelta
-
-# ── Constantes ────────────────────────────────────────────────────────────────
-YEAR = 2026
-BASE_FECHA = "2026-01-01 "
-
+# ─────────────────────────────────────────────
+# CONFIGURACIÓN DE PÁGINA
+# ─────────────────────────────────────────────
+st.set_page_config(
+    page_title="Reporte Biométrico",
+    page_icon="🕐",
+    layout="wide"
+)
+st.title("🕐 Reporte Consolidado Biométrico")
+st.markdown("Carga los archivos de **horario administrativo** y **biométrico** para generar el reporte.")
+# ─────────────────────────────────────────────
+# DICCIONARIO DE MESES EN ESPAÑOL (con .map)
+# ─────────────────────────────────────────────
 MESES_ES = {
-    1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
-    7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic"
+    1:  "ENERO",
+    2:  "FEBRERO",
+    3:  "MARZO",
+    4:  "ABRIL",
+    5:  "MAYO",
+    6:  "JUNIO",
+    7:  "JULIO",
+    8:  "AGOSTO",
+    9:  "SEPTIEMBRE",
+    10: "OCTUBRE",
+    11: "NOVIEMBRE",
+    12: "DICIEMBRE",
 }
-
-DIAS_MAP = {
-    "Monday": "LU", "Tuesday": "MA", "Wednesday": "MI",
-    "Thursday": "JU", "Friday": "VI", "Saturday": "SA", "Sunday": "DO"
-}
-
-FESTIVOS_CO = holidays.Colombia(years=YEAR)
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def get_semana_rango_es(row):
-    semana_ajustada = int(row["NUM_SEMANA"]) - 1
-    lunes = datetime.strptime(f'{YEAR}-W{semana_ajustada}-1', "%Y-W%W-%w")
-    domingo = lunes + timedelta(days=6)
-    return f"{lunes.day:02d} {MESES_ES[lunes.month]} - {domingo.day:02d} {MESES_ES[domingo.month]}"
-
-def limpiar_horarios(texto):
-    if not isinstance(texto, str):
-        return []
-    resultados = []
-    for fila in texto.split("\n"):
-        fila = fila.strip().upper()
-        dia = re.search(r'\b(LU|MA|MI|JU|VI|SA|DO)\b', fila)
-        if not dia:
-            continue
-        horas = re.search(r'(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})', fila)
-        if horas:
-            resultados.append({
-                "dia": dia.group(1),
-                "hora_inicio": horas.group(1),
-                "hora_fin": horas.group(2)
-            })
-    return resultados
-
-def horas_entre(df, col_ini, col_fin):
-    h_ini = pd.to_datetime(BASE_FECHA + df[col_ini].astype(str), errors='coerce')
-    h_fin = pd.to_datetime(BASE_FECHA + df[col_fin].astype(str), errors='coerce')
-    diff = (h_fin - h_ini).dt.total_seconds() / 3600
-    return np.where(diff < 0, diff + 24, diff)
-
-def calcular_recargo(df, col_ini, col_fin, inicio="19:00", fin="22:00"):
-    h_ini = pd.to_datetime(BASE_FECHA + df[col_ini].astype(str), errors='coerce')
-    h_fin = pd.to_datetime(BASE_FECHA + df[col_fin].astype(str), errors='coerce')
-    p_inicio = pd.to_datetime(BASE_FECHA + inicio)
-    p_fin    = pd.to_datetime(BASE_FECHA + fin)
-    diferencia = (h_fin.clip(upper=p_fin) - h_ini.clip(lower=p_inicio)).dt.total_seconds() / 3600
-    return diferencia.clip(lower=0).fillna(0).round(2)
-
-def calcular_recargos_reales(row):
-    if str(row['ENTRADA_BIO']).upper() == 'SIN MARCA' or pd.isna(row['ENTRADA_BIO']):
-        return 0.0
-    if row['recargo_proyectado'] <= 0:
-        return 0.0
-    try:
-        real_in  = pd.to_datetime(BASE_FECHA + str(row['ENTRADA_BIO']), errors='coerce')
-        real_out = pd.to_datetime(BASE_FECHA + str(row['SALIDA_BIO']),  errors='coerce')
-        proj_out = pd.to_datetime(BASE_FECHA + str(row['FIN_CLASE']),   errors='coerce')
-        if pd.isna(real_in) or pd.isna(real_out) or pd.isna(proj_out):
-            return 0.0
-        inicio_recargo = proj_out - pd.Timedelta(hours=row['recargo_proyectado'])
-        inicio_v = max(real_in, inicio_recargo)
-        fin_v    = min(real_out, proj_out)
-        if fin_v > inicio_v:
-            return round((fin_v - inicio_v).total_seconds() / 3600, 2)
-    except Exception as e:
-        return 0.0
-    return 0.0
-
-def procesar(file_carga, file_bio, file_aus, progress):
-
-    # ── 1. Carga y limpieza inicial
-    progress.progress(5, "Leyendo archivo de carga...")
-    df = pd.read_excel(file_carga)
-    df["HORAS"] = df["HORAS"].str.replace("NO TIENE", "0")
-    df["MATERIA_INI"] = pd.to_datetime(df["MATERIA_INI"], dayfirst=True)
-    df["MATERIA_FIN"] = pd.to_datetime(df["MATERIA_FIN"], dayfirst=True)
-    df1 = df.drop(columns=['MATERIA_ACTIVIDAD', 'SEDE', 'GRUPO', 'COD_MATERIA', 'CENTRO_COSTO', 'NPLAN', 'DEDICACIÓN'])
-
-    # ── 2. Explotar horarios por fila
-    progress.progress(15, "Procesando horarios...")
-    df1["horarios_lista"] = df1["HORAS"].apply(limpiar_horarios)
-    df1 = df1.explode("horarios_lista").reset_index(drop=True)
-    df_final = pd.concat([df1.drop(columns=["horarios_lista"]),
-                          pd.json_normalize(df1["horarios_lista"])], axis=1)
-
-    # ── 3. Separar clases normales vs complementarias
-    progress.progress(25, "Separando clases y complementarias...")
-    SIN_HORARIO = [0, "0", None, ""]
-    df_clases = df_final[~df_final["HORAS"].isin(SIN_HORARIO)]
-    df_compl  = df_final[ df_final["HORAS"].isin(SIN_HORARIO)]
-
-    COLS_GRUPO = ["CODIGO", "DOCUMENTO", "NOMBRE", "MATERIA_INI", "MATERIA_FIN"]
-    df_resumen_compl = (
-        df_compl.groupby(COLS_GRUPO)
-                .agg(TOTAL_HORAS=("TOTAL_HORAS", "sum"))
-                .reset_index()
-                .assign(dia="COMPL", HORAS="TOTAL SEMANAL")
-    )
-
-    df_final = pd.concat([df_clases, df_resumen_compl], ignore_index=True)
-    df_final.sort_values("NOMBRE", inplace=True)
-
-    # ── 4. Expandir clases a fechas diarias
-    progress.progress(35, "Expandiendo calendario semestral...")
-    df_para_expandir   = df_final[df_final["dia"] != "COMPL"]
-    df_resumen_semanal = df_final[df_final["dia"] == "COMPL"]
-
-    filas_expandidas = []
-    for _, row in df_para_expandir.iterrows():
-        temp = pd.DataFrame({"fecha": pd.date_range(row["MATERIA_INI"], row["MATERIA_FIN"], freq="D")})
-        temp["dia"] = temp["fecha"].dt.day_name().map(DIAS_MAP)
-        temp = temp[temp["dia"] == row["dia"]]
-        for col in df_para_expandir.columns:
-            if col not in ["fecha", "dia"]:
-                temp[col] = row[col]
-        filas_expandidas.append(temp)
-
-    df_clases_diarias = pd.concat(filas_expandidas, ignore_index=True)
-    df_calendario = pd.concat([df_clases_diarias, df_resumen_semanal], ignore_index=True)
-    df_calendario.sort_values(["NOMBRE", "fecha"], inplace=True)
-    df_calendario = df_calendario.drop(columns=["HORAS"])
-
-    # ── 5. Quitar festivos y Semana Santa
-    progress.progress(45, "Quitando festivos y Semana Santa...")
-    SEMANA_SANTA = ("2026-03-29", "2026-04-05")
-    df_calendario = df_calendario[
-        (df_calendario["fecha"] < SEMANA_SANTA[0]) |
-        (df_calendario["fecha"] > SEMANA_SANTA[1]) |
-        (df_calendario["dia"] == "COMPL")
-    ]
-    df_calendario = df_calendario[~df_calendario["fecha"].isin(FESTIVOS_CO.keys())]
-
-    # ── 5.1. Duración y recargo proyectado
-    df_calendario['duracion_clase'] = (
-        pd.to_datetime(df_calendario['hora_fin'],    format='%H:%M') -
-        pd.to_datetime(df_calendario['hora_inicio'], format='%H:%M')
-    ).dt.total_seconds() / 3600
-    df_calendario['recargo_proyectado'] = calcular_recargo(df_calendario, 'hora_inicio', 'hora_fin')
-
-    # ── 6. Agrupar por día
-    progress.progress(55, "Agrupando por día...")
-    df_agrupado = (
-        df_calendario[df_calendario["dia"] != "COMPL"]
-        .groupby(['DOCUMENTO', 'fecha']).agg(
-            Entrada_Real       = ('hora_inicio',        'min'),
-            Salida_Real        = ('hora_fin',           'max'),
-            horas_laborales    = ('duracion_clase',     'sum'),
-            recargo_proyectado = ('recargo_proyectado', 'sum')
-        )
-        .reset_index()
-    )
-
-    # ── 7. Unir complementarias y construir consolidado
-    progress.progress(60, "Consolidando datos...")
-    df_compl_final = (
-        df_calendario[df_calendario["dia"] == "COMPL"]
-        .copy()
-        .assign(fecha=lambda x: x["MATERIA_INI"],
-                Entrada_Real="00:00", Salida_Real="00:00",
-                recargo_proyectado=0.0)
-        .rename(columns={"TOTAL_HORAS": "horas_laborales"})
-    )
-
-    COLS_FINALES = ['DOCUMENTO', 'fecha', 'Entrada_Real', 'Salida_Real', 'horas_laborales', 'recargo_proyectado']
-    df_consolidado = pd.concat([df_agrupado, df_compl_final[COLS_FINALES]], ignore_index=True)
-
-    # ── 8. Llave y orden final
-    mask_clases = df_consolidado['Entrada_Real'] != "00:00"
-    df_consolidado['llave'] = np.where(
-        mask_clases,
-        df_consolidado['fecha'].dt.strftime('%d/%m/%Y') + '-' + df_consolidado['DOCUMENTO'].astype(str),
-        pd.NA
-    )
-    df_consolidado = (
-        df_consolidado
-        .sort_values(['DOCUMENTO', 'fecha', 'Entrada_Real'], ascending=[True, True, False])
-        [['llave', 'DOCUMENTO', 'fecha', 'Entrada_Real', 'Salida_Real', 'horas_laborales', 'recargo_proyectado']]
-    )
-
-    # ── Biométrico
-    progress.progress(65, "Leyendo biométrico...")
-    biometrico = pd.read_excel(file_bio,
-                               usecols=["fecha", "Documento", "hora_entrada", "hora_salida", "horas"],
-                               skiprows=1)
-    biometrico.columns = biometrico.columns.str.upper().str.strip()
-    biometrico['FECHA'] = pd.to_datetime(biometrico['FECHA'], dayfirst=True, errors='coerce')
-    biometrico_unificado = biometrico.groupby(['FECHA', 'DOCUMENTO']).agg(
-        HORA_ENTRADA=('HORA_ENTRADA', 'min'),
-        HORA_SALIDA =('HORA_SALIDA',  'max'),
-        HORAS       =('HORAS',        'sum')
-    ).reset_index()
-    llave_col = biometrico_unificado['FECHA'].dt.strftime('%d/%m/%Y') + '-' + biometrico_unificado['DOCUMENTO'].astype(str)
-    biometrico_unificado.insert(0, 'LLAVE', llave_col)
-    biometrico_unificado['NUM_SEMANA'] = biometrico_unificado['FECHA'].dt.isocalendar().week
-
-    # ── Cruce con consolidado
-    progress.progress(70, "Cruzando con biométrico...")
-    df_detalle_final = pd.merge(
-        df_consolidado,
-        biometrico_unificado[['LLAVE', 'HORA_ENTRADA', 'HORA_SALIDA', 'HORAS']],
-        left_on='llave', right_on='LLAVE',
-        how='left'
-    ).drop(columns=['LLAVE'])
-    df_detalle_final.rename(columns={
-        'Entrada_Real':    'INI_CLASE',
-        'Salida_Real':     'FIN_CLASE',
-        'horas_laborales': 'HORAS_CLASE',
-        'HORA_ENTRADA':    'ENTRADA_BIO',
-        'HORA_SALIDA':     'SALIDA_BIO',
-        'HORAS':           'TOTAL_BIO_DIA'
-    }, inplace=True)
-    cols = ['llave'] + [c for c in df_detalle_final.columns if c != 'llave']
-    df_detalle_final = df_detalle_final[cols]
-
-    # ── Recargos nocturnos
-    progress.progress(78, "Calculando recargos nocturnos...")
-    df_detalle_final['TOTAL_HORAS_RECARGO'] = 0.0
-    mask_recargo = df_detalle_final['recargo_proyectado'] > 0
-    df_detalle_final.loc[mask_recargo, 'TOTAL_HORAS_RECARGO'] = (
-        df_detalle_final[mask_recargo].apply(calcular_recargos_reales, axis=1)
-    )
-
-    # ── Semana
-    df_detalle_final['NUM_SEMANA'] = pd.to_datetime(df_detalle_final['fecha']).dt.isocalendar().week
-
-    # ── Ausentismos (opcional)
-    progress.progress(83, "Procesando ausentismos...")
-    if file_aus is not None:
-        ausentismos = pd.read_excel(file_aus, usecols=["fecha_ina", "cod_emp"], skiprows=1)
-        ausentismos.columns = ausentismos.columns.str.upper().str.strip()
-        ausentismos['FECHA_INA'] = pd.to_datetime(ausentismos['FECHA_INA'], dayfirst=True, errors='coerce')
-        llave_aus = ausentismos['FECHA_INA'].dt.strftime('%d/%m/%Y') + '-' + ausentismos['COD_EMP'].astype(str)
-        ausentismos.insert(0, 'llave', llave_aus)
-        mascara_ausencia     = df_detalle_final['llave'].isin(ausentismos['llave'])
-        mascara_sin_marcacion = (df_detalle_final['TOTAL_BIO_DIA'] == 0) | (df_detalle_final['TOTAL_BIO_DIA'].isna())
-        condicion_final = mascara_ausencia & mascara_sin_marcacion
-        df_detalle_final.loc[condicion_final, 'TOTAL_BIO_DIA'] = df_detalle_final.loc[condicion_final, 'HORAS_CLASE']
-        df_detalle_final['AUSENTISMO'] = np.where(df_detalle_final['llave'].isin(ausentismos['llave']), 'SI', 'NO')
-    else:
-        df_detalle_final['AUSENTISMO'] = 'NO'
-
-    # ── Biométrico semanal
-    progress.progress(87, "Calculando resumen semanal...")
-    biometrico_semanal = (
-        df_detalle_final
-        .groupby(['DOCUMENTO', 'NUM_SEMANA'])
-        .agg(
-            TOTAL_BIO_SEMANA  =('TOTAL_BIO_DIA',      'sum'),
-            TOTAL_RECARGO_SEM =('TOTAL_HORAS_RECARGO', 'sum')
-        )
-        .reset_index()
-    )
-
-    # ── Resumen semanal / balance final
-    progress.progress(90, "Construyendo balance final...")
-    clases_fijas = df_consolidado[df_consolidado["llave"].notna()].copy()
-    clases_fijas["NUM_SEMANA"] = clases_fijas["fecha"].dt.isocalendar().week
-
-    compl_base = df_calendario[df_calendario["dia"] == "COMPL"].copy()
-    filas_repartidas = []
-    for _, row in compl_base.iterrows():
-        for fecha_lunes in pd.date_range(start=row["MATERIA_INI"], end=row["MATERIA_FIN"], freq="W-MON"):
-            nueva_fila = row.copy()
-            nueva_fila["NUM_SEMANA"] = fecha_lunes.isocalendar().week
-            filas_repartidas.append(nueva_fila)
-    df_compl_por_semana = pd.DataFrame(filas_repartidas)
-
-    clases_para_unir = clases_fijas[['DOCUMENTO', 'NUM_SEMANA', 'horas_laborales', 'recargo_proyectado']].rename(
-        columns={'horas_laborales': 'HORAS_VALOR', 'recargo_proyectado': 'RECARGOS_VALOR'})
-    compl_para_unir = df_compl_por_semana[['DOCUMENTO', 'NUM_SEMANA', 'TOTAL_HORAS']].rename(
-        columns={'TOTAL_HORAS': 'HORAS_VALOR'})
-    compl_para_unir['RECARGOS_VALOR'] = 0.0
-
-    df_consolidado_total = pd.concat([clases_para_unir, compl_para_unir], ignore_index=True)
-    resumen_final = (
-        df_consolidado_total
-        .groupby(['DOCUMENTO', 'NUM_SEMANA'])
-        .agg(HORAS_VALOR=('HORAS_VALOR', 'sum'), RECARGOS_VALOR=('RECARGOS_VALOR', 'sum'))
-        .reset_index()
-        .rename(columns={'HORAS_VALOR': 'HORAS QUE DEBIA HACER', 'RECARGOS_VALOR': 'RECARGOS QUE DEBIA HACER'})
-    )
-    resumen_final = pd.merge(resumen_final, biometrico_semanal, on=['DOCUMENTO', 'NUM_SEMANA'], how='left').fillna(0).round(2)
-    resumen_final.rename(columns={
-        'TOTAL_BIO_SEMANA':  'HORAS HECHAS (BIOMÉTRICO)',
-        'TOTAL_RECARGO_SEM': 'RECARGOS HECHOS (BIOMÉTRICO)'
-    }, inplace=True)
-    resumen_final['INTERVALO_FECHAS'] = resumen_final.apply(get_semana_rango_es, axis=1)
-    cols = list(resumen_final.columns)
-    cols.insert(2, cols.pop(cols.index('INTERVALO_FECHAS')))
-    resumen_final = resumen_final[cols]
-
-    # ── Traer columnas al detalle final Y resumen final semanal
-    progress.progress(93, "Enriqueciendo detalle final...")
-    df_unicos = df[['DOCUMENTO', 'SEDE', 'NOMBRE', 'CENTRO_COSTO', 'DEDICACIÓN']].drop_duplicates(subset=['DOCUMENTO'])
-    df_detalle_final = pd.merge(df_detalle_final, df_unicos, on='DOCUMENTO', how='left')
-    columnas_ordenadas = [
-        'llave', 'DOCUMENTO', 'NOMBRE', 'fecha', 'NUM_SEMANA', 'SEDE', 'CENTRO_COSTO', 'DEDICACIÓN',
-        'INI_CLASE', 'FIN_CLASE', 'HORAS_CLASE', 'ENTRADA_BIO',
-        'SALIDA_BIO', 'TOTAL_BIO_DIA', 'recargo_proyectado', 'TOTAL_HORAS_RECARGO', 'AUSENTISMO'
-    ]
-    df_detalle_final = df_detalle_final[columnas_ordenadas]
-
-    resumen_final = pd.merge(resumen_final, df_unicos, on='DOCUMENTO', how='left')
-    columnas_ordenadas = ['DOCUMENTO','SEDE','CENTRO_COSTO','DEDICACIÓN','NUM_SEMANA','INTERVALO_FECHAS','HORAS QUE DEBIA HACER',
-                      'RECARGOS QUE DEBIA HACER','HORAS HECHAS (BIOMÉTRICO)','RECARGOS HECHOS (BIOMÉTRICO)']
-    resumen_final = resumen_final[columnas_ordenadas]
-
-
-    # ── Alivio de 15 minutos
-    progress.progress(96, "Aplicando alivio de 15 minutos...")
-    hora_completa   = np.ceil(df_detalle_final['TOTAL_HORAS_RECARGO'])
-    tiempo_faltante = hora_completa - df_detalle_final['TOTAL_HORAS_RECARGO']
-    condicion_alivio = (tiempo_faltante > 0) & (tiempo_faltante <= 0.25)
-    df_detalle_final.loc[condicion_alivio, 'TOTAL_HORAS_RECARGO'] = hora_completa[condicion_alivio]
-
-    # ── Exportar a buffer
-    progress.progress(98, "Generando archivo Excel...")
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        resumen_final.to_excel(writer,      sheet_name='Detalle semanal',       index=False)
-        df_detalle_final.to_excel(writer,   sheet_name='Detalle_Cruce_Diario',  index=False)
-        df_consolidado.to_excel(writer,     sheet_name='Archivo_crudo_limpio',  index=False)
-    buffer.seek(0)
-
-    progress.progress(100, "¡Listo!")
-    return buffer
-
-
-# ── UI Streamlit ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Reporte Docentes", page_icon="📋", layout="centered")
-st.title("📋 Reporte Docentes")
-st.markdown("Carga los archivos para generar el reporte consolidado.")
-
-col1, col2 = st.columns(2)
+# ─────────────────────────────────────────────
+# CARGA DE ARCHIVOS
+# ─────────────────────────────────────────────
+col1, col2, col3 = st.columns(3)
 with col1:
-    file_carga = st.file_uploader("Archivo de Carga *", type=["xlsx"])
-    file_bio   = st.file_uploader("Archivo Biométrico *", type=["xlsx"])
-with col2:
-    file_aus   = st.file_uploader("Ausentismos (opcional)", type=["xlsx"])
-
-st.divider()
-
-archivos_listos = file_carga is not None and file_bio is not None
-
-if st.button("▶ Procesar", disabled=not archivos_listos, use_container_width=True, type="primary"):
-    progress = st.progress(0, "Iniciando...")
-    try:
-        buffer = procesar(file_carga, file_bio, file_aus, progress)
-        st.session_state['resultado'] = buffer
-        st.success("Procesamiento completado.")
-    except Exception as e:
-        st.error(f"Error durante el procesamiento: {e}")
-
-if 'resultado' in st.session_state:
-    st.download_button(
-        label="⬇ Descargar REPORTE_DOCENTES.xlsx",
-        data=st.session_state['resultado'],
-        file_name="REPORTE_DOCENTES.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        type="primary"
+    st.subheader("📂 Archivo de Horario Administrativo")
+    file_carga = st.file_uploader(
+        "Sube CARGA_ADMINISTRATIVO.xlsx",
+        type=["xlsx"],
+        key="carga"
     )
+with col2:
+    st.subheader("📂 Archivo Biométrico")
+    file_bio = st.file_uploader(
+        "Sube BIOMETRICO.xlsx",
+        type=["xlsx"],
+        key="bio"
+    )
+with col3:
+    st.subheader("🏥 Archivo de Ausentismos")
+    file_ausentismos = st.file_uploader(
+        "Sube AUSENTISMOS.xlsx — opcional",
+        type=["xlsx"],
+        key="ausentismos"
+    )
+    if not file_ausentismos:
+        st.caption("Si no subes este archivo, el procesamiento continúa sin aplicar ausentismos.")
+# ─────────────────────────────────────────────
+# PROCESAMIENTO (solo si ambos archivos están cargados)
+# ─────────────────────────────────────────────
+if file_carga and file_bio:
+    with st.spinner("Procesando datos..."):
+        progress_bar = st.progress(0, text="Iniciando lectura de archivos...")
+        # ── 1. LEER CARGA ADMINISTRATIVA ──────────────────────────────
+        columnas_requeridas = [
+            "DOCUMENTO", "NOMBRE", "SEDE", "FINI", "FFIN",
+            "HORARIO_LUNES_1",    "HORARIO_LUNES_2",
+            "HORARIO_MARTES_1",   "HORARIO_MARTES_2",
+            "HORARIO_MIERCOLES_1","HORARIO_MIERCOLES_2",
+            "HORARIO_JUEVES_1",   "HORARIO_JUEVES_2",
+            "HORARIO_VIERNES_1",  "HORARIO_VIERNES_2",
+            "HORARIO_SABADO_1"
+        ]
+        df = pd.read_excel(file_carga, usecols=columnas_requeridas)
+        progress_bar.progress(10, text="Archivo administrativo leído. Combinando jornadas...")
+        # ── 2. COMBINAR JORNADAS POR DÍA ─────────────────────────────
+        dias = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES']
+        for dia in dias:
+            col_1 = f'HORARIO_{dia}_1'
+            col_2 = f'HORARIO_{dia}_2'
+            nueva = f'HORARIO_{dia}'
+            def combinar_horas(row, c1=col_1, c2=col_2):
+                h1 = str(row[c1]).strip()
+                h2 = str(row[c2]).strip()
+                if h2 == '-' or h2 == '' or 'nan' in h2.lower():
+                    return h1
+                try:
+                    inicio = h1.split('-')[0].strip()
+                    fin    = h2.split('-')[1].strip()
+                    return f"{inicio} - {fin}"
+                except:
+                    return h1
+            df[nueva] = df.apply(combinar_horas, axis=1)
+        df['HORARIO_SABADO'] = df['HORARIO_SABADO_1']
+        columnas_a_borrar = [f'HORARIO_{d}_{i}' for d in dias for i in [1, 2]] + ['HORARIO_SABADO_1']
+        df_final_step = df.drop(columns=columnas_a_borrar)
+        progress_bar.progress(20, text="Desdinamizando la estructura (Melt)...")
+        # ── 3. MELT (DESDINAMIZACIÓN) ─────────────────────────────────
+        id_vars    = ['DOCUMENTO', 'NOMBRE', 'SEDE', 'FINI', 'FFIN']
+        value_vars = ['HORARIO_LUNES','HORARIO_MARTES','HORARIO_MIERCOLES',
+                      'HORARIO_JUEVES','HORARIO_VIERNES','HORARIO_SABADO']
+        df_largo = df_final_step.melt(
+            id_vars=id_vars,
+            value_vars=value_vars,
+            var_name='DIA',
+            value_name='HORARIO'
+        )
+        df_largo['DIA'] = df_largo['DIA'].str.replace('HORARIO_', '')
+        progress_bar.progress(35, text="Calculando horas brutas y descuentos...")
+        # ── 4. CÁLCULO HORAS BRUTAS Y DESCUENTO ALMUERZO ─────────────
+        def calcular_horario_ajustado(rango_texto):
+            try:
+                partes = str(rango_texto).split('-')
+                if len(partes) < 2:
+                    return 0, 0
+                inicio      = datetime.strptime(partes[0].strip(), '%H:%M')
+                fin         = datetime.strptime(partes[1].strip(), '%H:%M')
+                total_bruto = int((fin - inicio).total_seconds() / 3600)
+                almuerzo    = max(0, total_bruto - 8)
+                return total_bruto, almuerzo
+            except:
+                return 0, 0
+        resultados = df_largo['HORARIO'].apply(
+            lambda x: pd.Series(calcular_horario_ajustado(x))
+        )
+        df_largo['HORAS_TOTALES_BRUTAS'] = resultados[0]
+        df_largo['DESCUENTO_ALMUERZO']   = resultados[1]
+        df_largo['JORNADA_FINAL']        = df_largo['HORAS_TOTALES_BRUTAS'] - df_largo['DESCUENTO_ALMUERZO']
+        progress_bar.progress(50, text="Construyendo el cronograma diario...")
+        # ── 5. CONSTRUCCIÓN CRONOGRAMA ────────────────────────────────
+        df_largo['FINI'] = pd.to_datetime(df_largo['FINI'], errors='coerce', dayfirst=True)
+        df_largo['FFIN'] = pd.to_datetime(df_largo['FFIN'], errors='coerce', dayfirst=True)
+        fecha_limite_proyeccion = pd.Timestamp('2027-12-31')
+        df_limpio = df_largo.dropna(subset=['FINI']).copy()
+        df_limpio['FFIN'] = df_limpio['FFIN'].fillna(fecha_limite_proyeccion)
+        df_limpio.loc[df_limpio['FFIN'] > fecha_limite_proyeccion, 'FFIN'] = fecha_limite_proyeccion
+        mapa_dias = {0:'LUNES',1:'MARTES',2:'MIERCOLES',3:'JUEVES',4:'VIERNES',5:'SABADO'}
+        cronograma_lista = []
+        for _, row in df_limpio.iterrows():
+            try:
+                rango_fechas = pd.date_range(start=row['FINI'], end=row['FFIN'], freq='D')
+                df_temp = pd.DataFrame({'FECHA': rango_fechas})
+                df_temp['DIA_SEMANA'] = df_temp['FECHA'].dt.dayofweek.map(mapa_dias)
+                df_temp = df_temp[df_temp['DIA_SEMANA'] == row['DIA']].copy()
+                if not df_temp.empty:
+                    df_temp['DOCUMENTO']           = row['DOCUMENTO']
+                    df_temp['NOMBRE']              = row['NOMBRE']
+                    df_temp['SEDE']                = row['SEDE']
+                    df_temp['HORARIO_PROYECTADO']  = row['HORARIO']
+                    df_temp['HORAS_TOTALES_BRUTAS']= row['HORAS_TOTALES_BRUTAS']
+                    df_temp['DESCUENTO_ALMUERZO']  = row['DESCUENTO_ALMUERZO']
+                    df_temp['HORAS_TURNO']         = row['JORNADA_FINAL']
+                    cronograma_lista.append(df_temp)
+            except Exception as e:
+                st.warning(f"Error procesando fila de {row['NOMBRE']}: {e}")
+                continue
+        df_cronograma_final = pd.concat(cronograma_lista, ignore_index=True)
+        progress_bar.progress(65, text="Calculando recargos nocturnos proyectados...")
+        # ── 6. RECARGOS NOCTURNOS PROYECTADOS ────────────────────────
+        def calcular_recargo_nocturno(horario_texto, inicio_nocturno=19):
+            try:
+                if not isinstance(horario_texto, str) or '-' not in horario_texto:
+                    return 0.0
+                partes  = horario_texto.split('-')
+                fmt     = '%H:%M'
+                inicio  = datetime.strptime(partes[0].strip(), fmt)
+                fin     = datetime.strptime(partes[1].strip(), fmt)
+                umbral  = inicio.replace(hour=inicio_nocturno, minute=0, second=0)
+                if fin <= umbral:
+                    return 0.0
+                if inicio < umbral and fin > umbral:
+                    return round((fin - umbral).total_seconds() / 3600, 2)
+                if inicio >= umbral:
+                    return round((fin - inicio).total_seconds() / 3600, 2)
+                return 0.0
+            except:
+                return 0.0
+        df_cronograma_final['RECARGOS_PROYECTADOS'] = df_cronograma_final['HORARIO_PROYECTADO'].apply(
+            lambda x: calcular_recargo_nocturno(x, inicio_nocturno=19)
+        )
+        # ── 7. SEPARAR HORA INICIO / SALIDA + LLAVE ──────────────────
+        split_col = df_cronograma_final['HORARIO_PROYECTADO'].str.split('-', expand=True)
+        df_cronograma_final['HORA_INICIO'] = split_col[0].str.strip()
+        df_cronograma_final['HORA_SALIDA'] = split_col[1].str.strip()
+        df_cronograma_final['llave'] = (
+            df_cronograma_final['FECHA'].dt.strftime('%d/%m/%Y') + "-" +
+            df_cronograma_final['DOCUMENTO'].astype(str)
+        )
+        columnas_ordenadas = ['llave','FECHA','DIA_SEMANA','DOCUMENTO','NOMBRE','SEDE','HORA_INICIO','HORA_SALIDA']
+        columnas_calculos  = ['HORAS_TOTALES_BRUTAS','DESCUENTO_ALMUERZO','HORAS_TURNO','RECARGOS_PROYECTADOS']
+        df_final = df_cronograma_final[columnas_ordenadas + columnas_calculos].copy()
+        # ── 7.1 FILTRAR PRIMEROS SIETE MESES ─────────────────────────
+        fecha_inicio = pd.to_datetime("2026-01-01")
+        fecha_fin    = pd.to_datetime("2026-07-31")
+        df_final = df_final[(df_final['FECHA'] >= fecha_inicio) & (df_final['FECHA'] <= fecha_fin)]
+        df_final = df_final.sort_values(by=['FECHA', 'NOMBRE']).reset_index(drop=True)
+        progress_bar.progress(75, text="Leyendo archivo biométrico...")
+        # ── 8. LEER BIOMÉTRICO ────────────────────────────────────────
+        biometrico = pd.read_excel(
+            file_bio,
+            usecols=["fecha","Documento","hora_entrada","hora_salida"],
+            skiprows=1
+        )
+        biometrico['fecha'] = pd.to_datetime(biometrico['fecha'], format='%d/%m/%Y')
+        biometrico.insert(
+            0, 'llave',
+            biometrico['fecha'].dt.strftime('%d/%m/%Y') + '-' + biometrico['Documento'].astype(str)
+        )
+        progress_bar.progress(85, text="Realizando cruce de datos...")
+        # ── 9. CRUCE ──────────────────────────────────────────────────
+        df_cruce = df_final[["llave","FECHA","DOCUMENTO","NOMBRE","SEDE",
+                             "HORA_INICIO","HORA_SALIDA","DESCUENTO_ALMUERZO"]].copy()
+        df_cruce.insert(1, "MES", df_cruce["FECHA"].dt.month.map(MESES_ES))
+        df_cruce = pd.merge(
+            df_cruce,
+            biometrico[['llave','hora_entrada','hora_salida']],
+            on='llave',
+            how='left'
+        )
+        progress_bar.progress(90, text="Calculando horas laboradas y validando festivos...")
+        # ── 10. PREPARAR SET DE AUSENTISMOS ──────────────────────────
+        set_ausencias = set()
+        if file_ausentismos is not None:
+            try:
+                ausentismos = pd.read_excel(
+                    file_ausentismos,
+                    usecols=["fecha_ina", "cod_emp"],
+                    skiprows=1
+                )
+                ausentismos.columns = ausentismos.columns.str.upper().str.strip()
+                ausentismos['FECHA_INA'] = pd.to_datetime(ausentismos['FECHA_INA'], dayfirst=True, errors='coerce')
+                llave_aus = ausentismos['FECHA_INA'].dt.strftime('%d/%m/%Y') + '-' + ausentismos['COD_EMP'].astype(str)
+                set_ausencias = set(llave_aus.dropna())
+                n_aus = len(set_ausencias)
+                st.info(f"ℹ️ Ausentismos cargados: {n_aus} registro(s) que se tratarán como horas proyectadas.")
+            except Exception as e:
+                st.warning(f"⚠️ No se pudo procesar el archivo de ausentismos: {e}")
+        # ── 11. HORAS LABORADAS ───────────────────────────────────────
+        festivos_co = holidays.Colombia(years=range(2025, 2028))
+        def calcular_riguroso_con_festivos(row):
+            es_semana_santa = (row['FECHA'] >= pd.Timestamp("2026-03-29")) and \
+                              (row['FECHA'] <= pd.Timestamp("2026-04-05"))
+            es_festivo  = row['FECHA'] in festivos_co
+            es_ausencia = row['llave'] in set_ausencias
+ 
+            if es_festivo or es_semana_santa or es_ausencia:
+                try:
+                    base  = "2026-01-01 "
+                    p_in  = pd.to_datetime(base + str(row['HORA_INICIO']))
+                    p_out = pd.to_datetime(base + str(row['HORA_SALIDA']))
+                    if p_out > p_in:
+                        bruto = (p_out - p_in).total_seconds() / 3600
+                        desc  = float(row['DESCUENTO_ALMUERZO'])
+                        turno = bruto - desc
+                        return round(max(0, turno), 2)
+                    return 0.0
+                except:
+                    return 0.0
+ 
+            if row['hora_entrada'] == 'SIN MARCA' or row['hora_salida'] == 'SIN MARCA' \
+               or pd.isna(row['hora_entrada']):
+                return 0.0
+            try:
+                base      = "2026-01-01 "
+                proj_in   = pd.to_datetime(base + str(row['HORA_INICIO']))
+                proj_out  = pd.to_datetime(base + str(row['HORA_SALIDA']))
+                real_in   = pd.to_datetime(base + str(row['hora_entrada']))
+                real_out  = pd.to_datetime(base + str(row['hora_salida']))
+                entrada_v = max(real_in,  proj_in)
+                salida_v  = min(real_out, proj_out)
+                if salida_v > entrada_v:
+                    horas_b  = (salida_v - entrada_v).total_seconds() / 3600
+                    desc     = float(row['DESCUENTO_ALMUERZO'])
+                    resultado = horas_b - desc if horas_b >= 6 and not (desc > 3) else horas_b
+                    return round(max(0, resultado), 2)
+                return 0.0
+            except:
+                return 0.0
+ 
+        df_cruce['HORAS_LABORADAS'] = df_cruce.apply(calcular_riguroso_con_festivos, axis=1)
+        # ── 11.5 AJUSTAR A 8 JORNADAS DE MÁS DE 8 HORAS ─────────────
+        df_cruce['HORAS_LABORADAS'] = df_cruce['HORAS_LABORADAS'].clip(upper=8.0)
+        progress_bar.progress(95, text="Calculando recargos reales...")
+        # ── 12. RECARGOS REALES ───────────────────────────────────────
+        def calcular_recargos_reales(row):
+            if row['hora_entrada'] == 'SIN MARCA' or pd.isna(row['hora_entrada']):
+                return 0.0
+            try:
+                h_salida_prog = pd.to_datetime(row['HORA_SALIDA'], format='%H:%M').time()
+                if h_salida_prog <= datetime.strptime("19:00", "%H:%M").time():
+                    return 0.0
+                base           = "2026-01-01 "
+                inicio_recargo = pd.to_datetime(base + "19:00")
+                fin_recargo    = pd.to_datetime(base + "22:00")
+                real_in        = pd.to_datetime(base + str(row['hora_entrada']))
+                real_out       = pd.to_datetime(base + str(row['hora_salida']))
+                proj_out       = pd.to_datetime(base + str(row['HORA_SALIDA']))
+                inicio_v       = max(real_in,  inicio_recargo)
+                fin_v          = min(real_out, proj_out, fin_recargo)
+                if fin_v > inicio_v:
+                    return round((fin_v - inicio_v).total_seconds() / 3600, 2)
+                return 0.0
+            except:
+                return 0.0
+ 
+        df_cruce['TOTAL_HORAS_RECARGO'] = df_cruce.apply(calcular_recargos_reales, axis=1)
+        # ── PREPARANDO EXCEL ──────────────────────────────────────────
+        progress_bar.progress(98, text="Generando archivo Excel para descarga...")
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_final.to_excel(writer, sheet_name='Planilla_horario', index=False)
+            df_cruce.to_excel(writer, sheet_name='Cruce_biometrico', index=False)
+        buffer.seek(0)
+        progress_bar.progress(100, text="¡Procesamiento completo!")
+    st.success("✅ ¡El archivo está listo!")
+    st.download_button(
+        label="⬇️ Descargar Reporte Excel",
+        data=buffer,
+        file_name="Reporte_Consolidado_Biometrico.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+else:
+    st.info("⬆️ Sube los archivos de horario y biométrico para comenzar el procesamiento.")
