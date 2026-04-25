@@ -304,7 +304,7 @@ def procesar(file_carga, file_bio, file_aus, progress):
     cols.insert(2, cols.pop(cols.index('INTERVALO_FECHAS')))
     resumen_final = resumen_final[cols]
 
-    # ── Traer columnas al detalle final
+    # ── Traer columnas al detalle final Y resumen final semanal
     progress.progress(93, "Enriqueciendo detalle final...")
     df_unicos = df[['DOCUMENTO', 'SEDE', 'NOMBRE', 'CENTRO_COSTO', 'DEDICACIÓN']].drop_duplicates(subset=['DOCUMENTO'])
     df_detalle_final = pd.merge(df_detalle_final, df_unicos, on='DOCUMENTO', how='left')
@@ -314,6 +314,12 @@ def procesar(file_carga, file_bio, file_aus, progress):
         'SALIDA_BIO', 'TOTAL_BIO_DIA', 'recargo_proyectado', 'TOTAL_HORAS_RECARGO', 'AUSENTISMO'
     ]
     df_detalle_final = df_detalle_final[columnas_ordenadas]
+
+    resumen_final = pd.merge(resumen_final, df_unicos, on='DOCUMENTO', how='left')
+    columnas_ordenadas = ['DOCUMENTO','SEDE','CENTRO_COSTO','DEDICACIÓN','NUM_SEMANA','INTERVALO_FECHAS','HORAS QUE DEBIA HACER',
+                      'RECARGOS QUE DEBIA HACER','HORAS HECHAS (BIOMÉTRICO)','RECARGOS HECHOS (BIOMÉTRICO)']
+    resumen_final = resumen_final[columnas_ordenadas]
+
 
     # ── Alivio de 15 minutos
     progress.progress(96, "Aplicando alivio de 15 minutos...")
