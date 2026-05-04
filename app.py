@@ -211,7 +211,7 @@ if file_carga and file_bio:
         progress_bar.progress(85, text="Realizando cruce de datos...")
         # ── 9. CRUCE ──────────────────────────────────────────────────
         df_cruce = df_final[["llave","FECHA","DOCUMENTO","NOMBRE","SEDE",
-                             "HORA_INICIO","HORA_SALIDA","DESCUENTO_ALMUERZO"]].copy()
+                             "HORA_INICIO","HORA_SALIDA","DESCUENTO_ALMUERZO","RECARGOS_PROYECTADOS"]].copy()
         df_cruce.insert(1, "MES", df_cruce["FECHA"].dt.month.map(MESES_ES))
         df_cruce = pd.merge(
             df_cruce,
