@@ -14,22 +14,24 @@ st.set_page_config(
 st.markdown("""
     <style>
     /* Importar fuente */
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
 
     /* Fuente global para toda la app */
     html, body, [class*="css"], .stMarkdown {
         font-family: 'Roboto', sans-serif;
+        font-weight: 300;
     }
 
     /* Color de los Títulos (st.title) */
     h1 {
         color: #2E86C1 !important; /* El azul de tu imagen */
-        font-weight: normal;
+        font-weight: 300;
     }
 
     /* Color de los encabezados (st.header / st.subheader) */
-    h2, h3 {
-        color: #2E86C1 !important;
+    h1, h2, h3 {
+        font-weight: 300;
+        color: #2E86C1;
     }
 
     </style>
