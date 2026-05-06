@@ -3,14 +3,43 @@ import pandas as pd
 from datetime import datetime
 import holidays
 import io
-# ─────────────────────────────────────────────
-# CONFIGURACIÓN DE PÁGINA
-# ─────────────────────────────────────────────
+# 1. CONFIGURACIÓN
 st.set_page_config(
     page_title="Reporte Biométrico",
     page_icon="🕐",
     layout="wide"
 )
+
+# 2. ESTILO DIRECTO (Fuentes y Colores)
+st.markdown("""
+    <style>
+    /* Importar fuente */
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+
+    /* Fuente global para toda la app */
+    html, body, [class*="css"], .stMarkdown {
+        font-family: 'Roboto', sans-serif;
+    }
+
+    /* Color de los Títulos (st.title) */
+    h1 {
+        color: #2E86C1 !important; /* El azul de tu imagen */
+        font-weight: 700;
+    }
+
+    /* Color de los encabezados (st.header / st.subheader) */
+    h2, h3 {
+        color: #2E86C1 !important;
+    }
+
+    /* Fondo de la página para que sea gris claro como la imagen */
+    .stApp {
+        background-color: #F5F5F5;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# 3. TU CONTENIDO EXISTENTE
 st.title("🕐 Reporte Consolidado Biométrico")
 st.markdown("Carga los archivos de **horario administrativo** y **biométrico** para generar el reporte.")
 # ─────────────────────────────────────────────
