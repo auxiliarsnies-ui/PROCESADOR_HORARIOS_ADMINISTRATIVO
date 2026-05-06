@@ -24,7 +24,7 @@ st.markdown("""
     /* Color de los Títulos (st.title) */
     h1 {
         color: #2E86C1 !important; /* El azul de tu imagen */
-        font-weight: 700;
+        font-weight: normal;
     }
 
     /* Color de los encabezados (st.header / st.subheader) */
