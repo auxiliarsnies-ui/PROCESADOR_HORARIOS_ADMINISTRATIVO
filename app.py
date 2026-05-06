@@ -32,10 +32,6 @@ st.markdown("""
         color: #2E86C1 !important;
     }
 
-    /* Fondo de la página para que sea gris claro como la imagen */
-    .stApp {
-        background-color: #F5F5F5;
-    }
     </style>
     """, unsafe_allow_html=True)
 
